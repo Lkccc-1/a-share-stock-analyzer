@@ -1,0 +1,10 @@
+# 固定为本地已验证可运行的精确版本，确保线上环境与本地一致
+akshare==1.19.1
+streamlit==1.65.0
+pandas==3.0.6
+numpy==2.5.4
+plotly==7.1.0
+requests==2.34.2
+openai==3.29.0
+python-dotenv==1.2.4
+curl_cffi==0.16.3
