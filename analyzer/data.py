@@ -320,12 +320,17 @@ def get_pledge(code):
 # ---------------- 行业 / 宏观 ----------------
 
 def get_industry_boards():
-    """行业板块行情（东方财富 → 新浪行业板块）。"""
+    """行业板块行情（东方财富 → 同花顺 → 新浪行业板块）。"""
     def _f():
         df = _safe("stock_board_industry_name_em")
         if df is not None and not df.empty:
             return df
-        # 新浪行业板块（含板块名称/涨跌幅/领涨股），东方财富被限流时的备用源
+        # 同花顺行业一览（含涨跌幅/上涨下跌家数/领涨股；无总市值/换手率，行业热榜自动省略这两列）
+        df = _safe("stock_board_industry_summary_ths")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"板块": "板块名称", "领涨股": "领涨股票"})
+            return df
+        # 新浪行业板块（含板块名称/涨跌幅/领涨股），最后备用
         df = _safe("stock_sector_spot", indicator="新浪行业")
         if df is not None and not df.empty:
             df = df.rename(columns={"板块": "板块名称", "股票名称": "领涨股票"})
