@@ -236,13 +236,6 @@ def render_stock_analysis(code):
 # ---------------- 渲染：推荐选股 ----------------
 
 def render_recommend():
-    spot_ok = data.spot_has_valuation_fields()
-    if not spot_ok:
-        st.warning(
-            "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段）。"
-            "「条件选股」与「行业热榜」会受影响，请改用下方「自选池深度评分」。"
-        )
-
     st.subheader("条件选股（基于全市场实时行情快筛）")
     c1, c2, c3, c4 = st.columns(4)
     pe_min = c1.number_input("市盈率下限", 0, 2000, 0)
@@ -250,6 +243,14 @@ def render_recommend():
     pb_max = c3.number_input("市净率上限", 0.0, 100.0, 5.0)
     min_mcap = c4.number_input("总市值下限(亿)", 0, 100000, 100)
     exclude_st = st.checkbox("剔除 ST / 退市风险股", value=True)
+
+    spot_ok = data.spot_has_valuation_fields()
+    if not spot_ok:
+        st.warning(
+            "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段）。"
+            "「条件选股」与「行业热榜」会受影响，请改用下方「自选池深度评分」。"
+        )
+
     if st.button("开始筛选", type="primary"):
         if not spot_ok:
             st.info("东方财富行情暂不可用，条件选股依赖市盈率/市净率/市值字段，暂时无法筛选。请改用下方「自选池深度评分」。")
