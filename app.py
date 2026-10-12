@@ -236,54 +236,40 @@ def render_stock_analysis(code):
 # ---------------- 渲染：推荐选股 ----------------
 
 def render_recommend():
-    st.subheader("条件选股（基于全市场实时行情快筛）")
-    c1, c2, c3, c4 = st.columns(4)
-    pe_min = c1.number_input("市盈率下限", 0, 2000, 0)
-    pe_max = c2.number_input("市盈率上限", 0, 2000, 30)
-    pb_max = c3.number_input("市净率上限", 0.0, 100.0, 5.0)
-    min_mcap = c4.number_input("总市值下限(亿)", 0, 100000, 100)
-    exclude_st = st.checkbox("剔除 ST / 退市风险股", value=True)
+    st.subheader("精选股票池（三层深度评分）")
+    st.caption("一键对预置组合做完整三层分析并按综合评分排序；或手动输入自选股批量分析。")
 
-    if st.button("开始筛选", type="primary"):
-        with st.spinner("检测数据源..."):
-            spot_ok = data.spot_has_valuation_fields()
-        if not spot_ok:
-            st.warning(
-                "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段），"
-                "条件选股暂时无法筛选。请改用下方「自选池深度评分」（个股评分不受影响）。"
-            )
-        else:
-            with st.spinner("筛选中..."):
-                df = recommend.quick_screen(
-                    pe_min=pe_min or None, pe_max=pe_max or None,
-                    pb_max=pb_max or None, min_mcap=min_mcap or None,
-                    exclude_st=exclude_st, top_n=30,
-                )
-            if df is None or df.empty:
-                st.info("无符合条件的股票，请放宽条件。")
-            else:
-                st.dataframe(df, use_container_width=True)
-                st.caption("快筛仅使用实时行情字段（PE/PB/市值等）；如需深度评分，请复制代码到下方自选池批量分析。")
+    pool_icons = {"核心资产池": "🏛️", "高股息池": "💰", "成长股池": "🚀", "行业龙头池": "👑"}
+    pool_cols = st.columns(4)
+    selected_codes = None
+    for i, (name, items) in enumerate(recommend.PRESET_POOLS.items()):
+        codes = [c for c, _ in items]
+        if pool_cols[i].button(
+            f"{pool_icons.get(name, '')} {name}（{len(codes)}只）",
+            key=f"pool_{name}", use_container_width=True,
+        ):
+            selected_codes = codes
+
+    with st.expander("查看各股票池成分股"):
+        for name, items in recommend.PRESET_POOLS.items():
+            st.caption(f"**{name}**：{'、'.join(n for _, n in items)}")
 
     st.divider()
-    st.subheader("行业热榜（按涨跌幅）")
-    boards = recommend.industry_hot()
-    if boards is None or boards.empty:
-        st.info("行业板块数据暂不可用。")
-    else:
-        st.dataframe(boards, use_container_width=True)
-
-    st.divider()
-    st.subheader("自选池深度评分（三层完整分析）")
+    st.subheader("自选股批量分析")
     watch = st.text_area("输入股票代码，逗号/空格/换行分隔（建议 ≤ 20 只）", placeholder="600519, 000858, 300750")
-    if st.button("批量分析", type="primary"):
+    if st.button("开始分析", type="primary"):
         codes = [c for c in watch.replace(",", " ").replace("，", " ").split() if c]
         if not codes:
             st.warning("请先输入股票代码。")
         else:
-            with st.spinner(f"正在分析 {len(codes)} 只股票（每只需拉取多路数据，请耐心等待）..."):
-                df = recommend.score_watchlist(codes[:20])
+            selected_codes = codes
+
+    if selected_codes:
+        with st.spinner(f"正在分析 {len(selected_codes)} 只股票（每只需拉取多路数据，请耐心等待）..."):
+            df = recommend.score_watchlist(selected_codes[:20])
+        if df is not None and not df.empty:
             st.dataframe(df, use_container_width=True)
+            st.caption("综合评分 = 基本面 40% + 估值 35% + 宏观政策 25%；评级含 ST/退市等硬风险一票否决。")
 
 
 # ---------------- 渲染：宏观环境 ----------------
@@ -359,7 +345,7 @@ def main():
 
 **功能**
 1. **个股分析**：输入代码或名称，输出三层量化评分 + 综合评级 + AI 报告 + 相关新闻。
-2. **推荐选股**：条件快筛、行业热榜、自选池深度评分三种模式。
+2. **推荐选股**：精选股票池（核心资产 / 高股息 / 成长 / 行业龙头）一键批量评分，或手动输入自选股做三层深度评分。
 3. **宏观环境**：PMI / GDP / CPI / M2 最新指标。
 
 **三层分析框架**

@@ -89,6 +89,9 @@ def _spot_tx():
         "pn": "市净率", "zsz": "总市值", "hsl": "换手率", "zdf_d60": "60日涨跌幅",
     })
     df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+    # 腾讯源名称带空格（如「五 粮 液」），去掉以便按名称搜索/显示
+    if "name" in df.columns:
+        df["name"] = df["name"].astype(str).str.replace(" ", "", regex=False)
     # 腾讯总市值单位为亿元 → 统一为元（与东方财富一致）
     if "总市值" in df.columns:
         df["总市值"] = pd.to_numeric(df["总市值"], errors="coerce") * 1e8
@@ -128,6 +131,8 @@ def get_all_spot():
         if df is not None and not df.empty:
             df = df.rename(columns={"代码": "code", "名称": "name"})
             df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+            if "name" in df.columns:
+                df["name"] = df["name"].astype(str).str.replace(" ", "", regex=False)
             _SPOT_SOURCE = "新浪"
         return df
 
