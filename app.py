@@ -146,6 +146,9 @@ def render_stock_analysis(code):
     k5.metric("市净率", _fmt(spot.get("市净率")))
     k6.metric("总市值", f"{_fmt(spot.get('总市值', 0) / 1e8, 0)}亿" if spot.get("总市值") else "—")
 
+    if not all(k in spot for k in ("市盈率-动态", "市净率", "总市值")):
+        st.caption("注：实时行情已回退备用源，市盈率/市净率/总市值暂缺；估值请以「② 估值水平 · 明细」为准。")
+
     left, right = st.columns([1, 1.4])
     with left:
         st.plotly_chart(score_gauge(r["total_score"], STATUS[status]), use_container_width=True)
@@ -184,9 +187,12 @@ def render_stock_analysis(code):
         c3.metric("成长性价比", v["growth"]["score"])
         c3.caption(_detail_text(v["growth"]["detail"]))
         mref = r.get("market_ref") or {}
-        st.caption(
-            f"全市场中位数参考：市盈率 {_fmt(mref.get('pe_median'))} · 市净率 {_fmt(mref.get('pb_median'))}"
-        )
+        if mref.get("pe_median") is None and mref.get("pb_median") is None:
+            st.caption("全市场中位数参考：东方财富行情暂不可用，暂无（估值对比基准缺失，不影响个股评分）。")
+        else:
+            st.caption(
+                f"全市场中位数参考：市盈率 {_fmt(mref.get('pe_median'))} · 市净率 {_fmt(mref.get('pb_median'))}"
+            )
 
     with st.expander("③ 宏观与政策环境 · 明细"):
         m = r["macro"]
@@ -230,6 +236,13 @@ def render_stock_analysis(code):
 # ---------------- 渲染：推荐选股 ----------------
 
 def render_recommend():
+    spot_ok = data.spot_has_valuation_fields()
+    if not spot_ok:
+        st.warning(
+            "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段）。"
+            "「条件选股」与「行业热榜」会受影响，请改用下方「自选池深度评分」。"
+        )
+
     st.subheader("条件选股（基于全市场实时行情快筛）")
     c1, c2, c3, c4 = st.columns(4)
     pe_min = c1.number_input("市盈率下限", 0, 2000, 0)
@@ -238,17 +251,20 @@ def render_recommend():
     min_mcap = c4.number_input("总市值下限(亿)", 0, 100000, 100)
     exclude_st = st.checkbox("剔除 ST / 退市风险股", value=True)
     if st.button("开始筛选", type="primary"):
-        with st.spinner("筛选中..."):
-            df = recommend.quick_screen(
-                pe_min=pe_min or None, pe_max=pe_max or None,
-                pb_max=pb_max or None, min_mcap=min_mcap or None,
-                exclude_st=exclude_st, top_n=30,
-            )
-        if df is None or df.empty:
-            st.info("无符合条件的股票，请放宽条件。")
+        if not spot_ok:
+            st.info("东方财富行情暂不可用，条件选股依赖市盈率/市净率/市值字段，暂时无法筛选。请改用下方「自选池深度评分」。")
         else:
-            st.dataframe(df, use_container_width=True)
-            st.caption("快筛仅使用实时行情字段（PE/PB/市值等）；如需深度评分，请复制代码到下方自选池批量分析。")
+            with st.spinner("筛选中..."):
+                df = recommend.quick_screen(
+                    pe_min=pe_min or None, pe_max=pe_max or None,
+                    pb_max=pb_max or None, min_mcap=min_mcap or None,
+                    exclude_st=exclude_st, top_n=30,
+                )
+            if df is None or df.empty:
+                st.info("无符合条件的股票，请放宽条件。")
+            else:
+                st.dataframe(df, use_container_width=True)
+                st.caption("快筛仅使用实时行情字段（PE/PB/市值等）；如需深度评分，请复制代码到下方自选池批量分析。")
 
     st.divider()
     st.subheader("行业热榜（按涨跌幅）")

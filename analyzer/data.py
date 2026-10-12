@@ -276,3 +276,14 @@ def market_median():
         s = s[s > 0]
         res[col] = float(s.median()) if not s.empty else None
     return res.get("市盈率-动态"), res.get("市净率")
+
+
+def spot_has_valuation_fields():
+    """全市场快照是否含 PE/PB/市值字段（东方财富源）。
+
+    返回 False 说明已回退到新浪源（缺估值/市值字段），上层据此给出「数据暂不可用」提示。
+    """
+    spot = get_all_spot()
+    if spot is None or spot.empty:
+        return False
+    return all(c in spot.columns for c in ("市盈率-动态", "市净率", "总市值"))
