@@ -41,18 +41,80 @@ def _safe(name, *args, default=None, **kwargs):
 
 # ---------------- 行情 / 标的 ----------------
 
-def get_all_spot():
-    """全市场 A 股实时行情（优先东方财富，失败回退新浪），列名统一为 code/name。
+def _spot_tx():
+    """腾讯全市场行情（含 PE/PB/市值），东方财富被限流时的备用源。
 
-    注：新浪回退源不含 PE/PB/总市值，仅供名称与价格查询。
+    用 curl_cffi 浏览器伪装直连腾讯接口，规避海外 IP 被非浏览器 UA 拦截的问题
+    （与新闻接口同理：东方财富的 akshare 封装用 requests、易被限流，而 curl_cffi 可用）。
+    """
+    try:
+        from curl_cffi import requests as req
+    except Exception:  # noqa: BLE001
+        import requests as req
+
+    url = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList"
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "referer": "https://stockapp.finance.qq.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+    }
+    page_size, offset, total, rows = 200, 0, None, []
+    for _ in range(40):  # 防御性上限，正常约 10+ 页
+        params = {
+            "_appver": "11.17.0",
+            "board_code": "aStock",
+            "sort_type": "price",
+            "direct": "down",
+            "offset": str(offset),
+            "count": str(page_size),
+        }
+        try:
+            data = (req.get(url, params=params, headers=headers, timeout=20).json() or {}).get("data") or {}
+        except Exception as e:  # noqa: BLE001
+            print(f"[数据源失败] 腾讯行情: {e}")
+            break
+        rank = data.get("rank_list") or []
+        if not rank:
+            break
+        rows.extend(rank)
+        total = int(data.get("total") or 0)
+        offset += page_size
+        if offset >= total:
+            break
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows).drop_duplicates(subset=["code"]).rename(columns={
+        "zxj": "最新价", "zdf": "涨跌幅", "pe_ttm": "市盈率-动态",
+        "pn": "市净率", "zsz": "总市值", "hsl": "换手率", "zdf_d60": "60日涨跌幅",
+    })
+    df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+    # 腾讯总市值单位为亿元 → 统一为元（与东方财富一致）
+    if "总市值" in df.columns:
+        df["总市值"] = pd.to_numeric(df["总市值"], errors="coerce") * 1e8
+    return df
+
+
+def get_all_spot():
+    """全市场 A 股实时行情，列名统一为 code/name/最新价/涨跌幅/市盈率-动态/市净率/总市值 等。
+
+    三级回退：东方财富 → 腾讯（含 PE/PB/市值）→ 新浪（仅名称与价格，无 PE/PB/市值）。
     """
     def _f():
+        # 1) 东方财富（字段最全，海外偶发限流）
         df = _safe("stock_zh_a_spot_em")
-        if df is None or df.empty:
-            df = _safe("stock_zh_a_spot")
         if df is not None and not df.empty:
             df = df.rename(columns={"代码": "code", "名称": "name"})
-            # 新浪回退源代码带交易所前缀（sh/sz/bj），统一为 6 位纯数字
+            df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+            return df
+        # 2) 腾讯（含 PE/PB/市值，独立于东方财富）
+        df = _spot_tx()
+        if df is not None and not df.empty:
+            return df
+        # 3) 新浪（仅名称与价格）
+        df = _safe("stock_zh_a_spot")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"代码": "code", "名称": "name"})
             df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
         return df
 
@@ -245,8 +307,18 @@ def get_pledge(code):
 # ---------------- 行业 / 宏观 ----------------
 
 def get_industry_boards():
-    """行业板块行情。"""
-    return _cached("boards", 300, lambda: _safe("stock_board_industry_name_em"))
+    """行业板块行情（东方财富 → 新浪行业板块）。"""
+    def _f():
+        df = _safe("stock_board_industry_name_em")
+        if df is not None and not df.empty:
+            return df
+        # 新浪行业板块（含板块名称/涨跌幅/领涨股），东方财富被限流时的备用源
+        df = _safe("stock_sector_spot", indicator="新浪行业")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"板块": "板块名称", "股票名称": "领涨股票"})
+        return df
+
+    return _cached("boards", 300, _f)
 
 
 def get_macro_data():
