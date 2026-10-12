@@ -244,16 +244,14 @@ def render_recommend():
     min_mcap = c4.number_input("总市值下限(亿)", 0, 100000, 100)
     exclude_st = st.checkbox("剔除 ST / 退市风险股", value=True)
 
-    spot_ok = data.spot_has_valuation_fields()
-    if not spot_ok:
-        st.warning(
-            "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段）。"
-            "「条件选股」与「行业热榜」会受影响，请改用下方「自选池深度评分」。"
-        )
-
     if st.button("开始筛选", type="primary"):
+        with st.spinner("检测数据源..."):
+            spot_ok = data.spot_has_valuation_fields()
         if not spot_ok:
-            st.info("东方财富行情暂不可用，条件选股依赖市盈率/市净率/市值字段，暂时无法筛选。请改用下方「自选池深度评分」。")
+            st.warning(
+                "⚠️ 东方财富全市场行情当前暂不可用（已回退新浪，缺少市盈率/市净率/市值字段），"
+                "条件选股暂时无法筛选。请改用下方「自选池深度评分」（个股评分不受影响）。"
+            )
         else:
             with st.spinner("筛选中..."):
                 df = recommend.quick_screen(
