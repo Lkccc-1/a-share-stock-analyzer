@@ -95,27 +95,40 @@ def _spot_tx():
     return df
 
 
+_SPOT_SOURCE = None  # 最近一次全市场行情实际使用的数据源（东方财富/腾讯/新浪）
+
+
+def spot_source():
+    """返回最近一次全市场行情实际使用的数据源，未拉取时为 None。"""
+    return _SPOT_SOURCE
+
+
 def get_all_spot():
     """全市场 A 股实时行情，列名统一为 code/name/最新价/涨跌幅/市盈率-动态/市净率/总市值 等。
 
     三级回退：东方财富 → 腾讯（含 PE/PB/市值）→ 新浪（仅名称与价格，无 PE/PB/市值）。
     """
     def _f():
+        global _SPOT_SOURCE
+        _SPOT_SOURCE = None
         # 1) 东方财富（字段最全，海外偶发限流）
         df = _safe("stock_zh_a_spot_em")
         if df is not None and not df.empty:
             df = df.rename(columns={"代码": "code", "名称": "name"})
             df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+            _SPOT_SOURCE = "东方财富"
             return df
         # 2) 腾讯（含 PE/PB/市值，独立于东方财富）
         df = _spot_tx()
         if df is not None and not df.empty:
+            _SPOT_SOURCE = "腾讯"
             return df
         # 3) 新浪（仅名称与价格）
         df = _safe("stock_zh_a_spot")
         if df is not None and not df.empty:
             df = df.rename(columns={"代码": "code", "名称": "name"})
             df["code"] = df["code"].astype(str).str.replace(r"^(sh|sz|bj)", "", regex=True)
+            _SPOT_SOURCE = "新浪"
         return df
 
     return _cached("spot_all", 120, _f)

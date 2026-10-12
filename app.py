@@ -334,6 +334,7 @@ def main():
         st.caption(
             f"评分权重：基本面 {w['fundamental']['total']}% · 估值 {w['valuation']['total']}% · 宏观政策 {w['macro']['total']}%"
         )
+        st.caption(f"行情数据源：{data.spot_source() or '尚未拉取'}")
         st.caption(DISCLAIMER)
 
     tab1, tab2, tab3, tab4 = st.tabs(["📊 个股分析", "⭐ 推荐选股", "🌐 宏观环境", "ℹ️ 使用说明"])
