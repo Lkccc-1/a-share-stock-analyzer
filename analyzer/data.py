@@ -12,6 +12,22 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
+# 强制所有 requests 请求带上默认超时：akShare 内部大量 requests 调用不带 timeout，
+# 在海外服务器（Streamlit Cloud 美国节点）连国内数据源时，连接可能被防火墙丢弃而非拒绝，
+# 导致请求无限挂起、界面 spinner 一直转。此处全局兜底 (connect, read)，仅在未显式指定 timeout 时生效。
+import requests as _requests
+
+_ORIG_SESSION_REQUEST = _requests.sessions.Session.request
+
+
+def _timed_request(self, method, url, **kwargs):
+    if kwargs.get("timeout") is None:
+        kwargs["timeout"] = (10, 25)
+    return _ORIG_SESSION_REQUEST(self, method, url, **kwargs)
+
+
+_requests.sessions.Session.request = _timed_request
+
 _CACHE = {}
 
 
@@ -59,7 +75,10 @@ def _spot_tx():
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
     }
     page_size, offset, total, rows = 200, 0, None, []
+    deadline = time.time() + 45  # 单次全市场拉取最长 45 秒，避免海外网络下无限等待
     for _ in range(40):  # 防御性上限，正常约 10+ 页
+        if time.time() > deadline:
+            break
         params = {
             "_appver": "11.17.0",
             "board_code": "aStock",
@@ -98,6 +117,59 @@ def _spot_tx():
     return df
 
 
+def _spot_single_tx(code):
+    """腾讯单只股票实时行情（轻量接口，独立于全市场拉取）。
+
+    全市场行情在海外服务器上既慢又易被限流，个股分析无需全市场快照，
+    故用此单股接口兜底，返回与 get_all_spot 一致的字段子集。
+    """
+    code = str(code)
+    if code.startswith(("6", "9")):
+        sym = "sh" + code
+    elif code.startswith(("4", "8")):
+        sym = "bj" + code
+    else:
+        sym = "sz" + code
+
+    try:
+        from curl_cffi import requests as req
+    except Exception:  # noqa: BLE001
+        import requests as req
+
+    try:
+        r = req.get(f"https://qt.gtimg.cn/q={sym}", timeout=10)
+        r.encoding = "gbk"
+        txt = r.text
+    except Exception as e:  # noqa: BLE001
+        print(f"[数据源失败] 腾讯单股行情: {e}")
+        return None
+
+    i, j = txt.find('"'), txt.rfind('"')
+    if i == -1 or j <= i:
+        return None
+    p = txt[i + 1:j].split("~")
+    if len(p) < 47:
+        return None
+
+    def _num(s, scale=1.0):
+        try:
+            return float(s) * scale
+        except (TypeError, ValueError):
+            return None
+
+    # qt.gtimg.cn 字段：1 名称 / 3 最新价 / 32 涨跌幅 / 38 换手率 / 39 市盈率(TTM) / 45 总市值(亿) / 46 市净率
+    return {
+        "code": code,
+        "name": p[1].replace(" ", ""),
+        "最新价": _num(p[3]),
+        "涨跌幅": _num(p[32]),
+        "市盈率-动态": _num(p[39]),
+        "市净率": _num(p[46]),
+        "总市值": _num(p[45], 1e8),
+        "换手率": _num(p[38]),
+    }
+
+
 _SPOT_SOURCE = None  # 最近一次全市场行情实际使用的数据源（东方财富/腾讯/新浪）
 
 
@@ -106,11 +178,19 @@ def spot_source():
     return _SPOT_SOURCE
 
 
-def get_all_spot():
+def get_all_spot(cached_only=False):
     """全市场 A 股实时行情，列名统一为 code/name/最新价/涨跌幅/市盈率-动态/市净率/总市值 等。
 
     三级回退：东方财富 → 腾讯（含 PE/PB/市值）→ 新浪（仅名称与价格，无 PE/PB/市值）。
+
+    cached_only=True 时只读缓存、不触发网络拉取（供个股分析轻量路径使用）。
     """
+    if cached_only:
+        hit = _CACHE.get("spot_all")
+        if hit and time.time() - hit[0] < 120:
+            return hit[1]
+        return None
+
     def _f():
         global _SPOT_SOURCE
         _SPOT_SOURCE = None
@@ -168,12 +248,18 @@ def normalize_symbol(inp):
 
 
 def get_stock_spot(code):
-    """单只股票实时行情快照（dict）。"""
-    spot = get_all_spot()
-    if spot is None or spot.empty:
-        return None
-    row = spot[spot["code"].astype(str) == str(code)]
-    return row.iloc[0].to_dict() if not row.empty else None
+    """单只股票实时行情快照（dict）。
+
+    优先读已缓存的全市场快照（字段最全）；未缓存时不触发昂贵的全市场拉取，
+    改用腾讯单股轻量接口，避免个股分析被全市场行情拖慢或卡住。
+    """
+    code = str(code)
+    spot = get_all_spot(cached_only=True)
+    if spot is not None and not spot.empty:
+        row = spot[spot["code"].astype(str) == code]
+        if not row.empty:
+            return row.iloc[0].to_dict()
+    return _spot_single_tx(code)
 
 
 def get_history(code, days=250):
@@ -358,8 +444,12 @@ def get_macro_data():
 
 
 def market_median():
-    """全市场市盈率 / 市净率中位数（剔除非正数），作为估值对比基准。"""
-    spot = get_all_spot()
+    """全市场市盈率 / 市净率中位数（剔除非正数），作为估值对比基准。
+
+    只读已缓存的全市场快照，避免个股分析因拉取全市场中位数而额外阻塞；
+    未缓存时返回 (None, None)，界面已做「暂无」降级。
+    """
+    spot = get_all_spot(cached_only=True)
     if spot is None or spot.empty:
         return None, None
     res = {}
